@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Employee {
+  id                 String         @id @map("_id")
+  name               String
+  email              String         @unique
+  role               String         @default("EMPLOYEE")
+  password           String?
+  hasChangedPassword Boolean        @default(false)
+  leaves             LeaveRequest[]
+  attendances        Attendance[]
+  activities         ActivityLog[]
+  appActivities      AppActivity[]
+}
+
+model Admin {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  email    String   @unique
+  password String
+}
+
+model LeaveRequest {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  employeeId String
+  startDate  DateTime
+  endDate    DateTime
+  leaveType  String   @default("FULL_DAY") // FULL_DAY, HALF_DAY, HOURLY
+  duration   String?  // e.g., "First Half", "3 Hours"
+  reason     String?
+  status     String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt  DateTime @default(now())
+
+  employee   Employee @relation(fields: [employeeId], references: [id])
+}
+
+model Attendance {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  employeeId String
+  date       String   // e.g. "YYYY-MM-DD"
+  clockIn    DateTime?
+  clockOut   DateTime?
+  totalMinutes Int    @default(0) // active minutes worked
+  createdAt  DateTime @default(now())
+
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  @@unique([employeeId, date])
+}
+
+model ActivityLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  employeeId String
+  status     String   // "ACTIVE", "IDLE", "OFFLINE"
+  timestamp  DateTime @default(now())
+
+  employee   Employee @relation(fields: [employeeId], references: [id])
+}
+
+model AppActivity {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  employeeId  String
+  date        String
+  appName     String
+  durationSec Int      @default(0) // active seconds used
+  timestamp   DateTime @default(now())
+
+  employee    Employee @relation(fields: [employeeId], references: [id])
+}
