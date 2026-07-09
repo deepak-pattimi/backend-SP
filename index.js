@@ -113,7 +113,7 @@ app.post('/api/employees', async (req, res) => {
         from: `"Admin System" <${process.env.SMTP_USER}>`,
         to: email,
         subject: 'Your Employee Portal Credentials',
-        text: `Hello ${name},\n\nWelcome! Your Employee Portal credentials are:\n\nEmployee ID: ${id}\nTemporary Password: ${tempPassword}\n\nPlease login at http://localhost:5173/`
+        text: `Hello ${name},\n\nWelcome! Your Employee Portal credentials are:\n\nEmployee ID: ${id}\nTemporary Password: ${tempPassword}\n\nPlease login at https://app.subhadapolymers.in/`
       }).then(() => console.log(`Sent temporary password to ${email}`))
         .catch(err => console.error('Failed to send credentials email', err));
     }
@@ -191,7 +191,7 @@ app.post('/api/leaves', async (req, res) => {
         from: `"Leave System" <${process.env.SMTP_USER}>`,
         to: process.env.ADMIN_EMAIL,
         subject: `New Leave Request from ${leave.employee.name}`,
-        text: `${leave.employee.name} requested leave: ${durationText}. Reason: ${reason}. Approve: http://localhost:3000/api/leaves/${leave.id}/approve?status=APPROVED`,
+        text: `${leave.employee.name} requested leave: ${durationText}. Reason: ${reason}. Approve: https://api.subhadapolymers.in/api/leaves/${leave.id}/approve?status=APPROVED`,
         html: `
           <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; max-width: 600px;">
             <h2 style="color: #333;">New Leave Request</h2>
@@ -199,8 +199,8 @@ app.post('/api/leaves', async (req, res) => {
             <p><b>Duration:</b> ${durationText}</p>
             <p style="padding: 10px; background-color: #f9fafb; border-left: 4px solid #4F46E5;"><b>Reason:</b> ${reason}</p>
             <div style="margin-top: 20px;">
-              <a href="http://localhost:3000/api/leaves/${leave.id}/approve?status=APPROVED" style="background-color: #22c55e; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold; margin-right: 10px;">Approve</a>
-              <a href="http://localhost:3000/api/leaves/${leave.id}/approve?status=REJECTED" style="background-color: #ef4444; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold;">Reject</a>
+              <a href="https://api.subhadapolymers.in/api/leaves/${leave.id}/approve?status=APPROVED" style="background-color: #22c55e; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold; margin-right: 10px;">Approve</a>
+              <a href="https://api.subhadapolymers.in/api/leaves/${leave.id}/approve?status=REJECTED" style="background-color: #ef4444; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; font-weight: bold;">Reject</a>
             </div>
           </div>
         `
