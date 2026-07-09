@@ -515,23 +515,25 @@ app.get('/api/attendance/daily', async (req, res) => {
       where: { date: dateStr }
     });
 
-    // Find leaves overlapping with this date
-    const targetDate = new Date(dateStr);
-    targetDate.setUTCHours(0, 0, 0, 0);
-    const endOfDay = new Date(dateStr);
-    endOfDay.setUTCHours(23, 59, 59, 999);
-    
     const approvedLeaves = await prisma.leaveRequest.findMany({
-      where: {
-        status: 'APPROVED',
-        startDate: { lte: endOfDay },
-        endDate: { gte: targetDate }
-      }
+      where: { status: 'APPROVED' }
     });
+
+    const isOverlapping = (leave, dateStr) => {
+      const s = new Date(leave.startDate);
+      s.setUTCHours(12, 0, 0, 0); // Shift to middle of day to ignore UTC offset bugs
+      const e = new Date(leave.endDate);
+      e.setUTCHours(12, 0, 0, 0);
+      
+      const target = new Date(dateStr);
+      target.setUTCHours(12, 0, 0, 0);
+      
+      return s <= target && e >= target;
+    };
 
     const dailyData = employees.map(emp => {
       const att = attendances.find(a => a.employeeId === emp.id);
-      const leave = approvedLeaves.find(l => l.employeeId === emp.id);
+      const leave = approvedLeaves.find(l => l.employeeId === emp.id && isOverlapping(l, dateStr));
       return {
         id: emp.id,
         name: emp.name,
