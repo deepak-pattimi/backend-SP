@@ -37,7 +37,7 @@ model LeaveRequest {
   status     String   @default("PENDING") // PENDING, APPROVED, REJECTED
   createdAt  DateTime @default(now())
 
-  employee   Employee @relation(fields: [employeeId], references: [id])
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model Attendance {
@@ -49,7 +49,7 @@ model Attendance {
   totalMinutes Int    @default(0) // active minutes worked
   createdAt  DateTime @default(now())
 
-  employee   Employee @relation(fields: [employeeId], references: [id])
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   @@unique([employeeId, date])
 }
 
@@ -59,7 +59,7 @@ model ActivityLog {
   status     String   // "ACTIVE", "IDLE", "OFFLINE"
   timestamp  DateTime @default(now())
 
-  employee   Employee @relation(fields: [employeeId], references: [id])
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
 
 model AppActivity {
@@ -70,5 +70,5 @@ model AppActivity {
   durationSec Int      @default(0) // active seconds used
   timestamp   DateTime @default(now())
 
-  employee    Employee @relation(fields: [employeeId], references: [id])
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
