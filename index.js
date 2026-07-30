@@ -111,10 +111,11 @@ app.post('/api/employees/login', async (req, res) => {
     if (!emp || emp.password !== password) return res.status(401).json({ error: 'Invalid ID or Password' });
     
     const sessionId = Date.now().toString() + Math.random().toString(36).substring(2);
-    io.emit('force-logout', { employeeId: emp.id, activeSessionId: sessionId });
 
-    // Store the activeSessionId in LiveTracking ONLY if it's from the Desktop Agent
+    // Only emit force-logout and update tracking session if logging in from the Desktop Agent
     if (req.body.source === 'desktop') {
+      io.emit('force-logout', { employeeId: emp.id, activeSessionId: sessionId });
+      
       await prisma.liveTracking.upsert({
         where: { employeeId: emp.id },
         update: { activeSessionId: sessionId, forceLogout: false },
