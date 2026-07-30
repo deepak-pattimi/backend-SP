@@ -368,6 +368,25 @@ app.put('/api/employees/:id', async (req, res) => {
   }
 });
 
+// Lightweight fast-polling status check for instantaneous lockdown
+app.get('/api/telemetry/status/:employeeId/:sessionId', async (req, res) => {
+  const { employeeId, sessionId } = req.params;
+  try {
+    const existingLive = await prisma.liveTracking.findUnique({ where: { employeeId } });
+    if (!existingLive) return res.json({ forceLogout: false });
+
+    const isHijacked = existingLive.activeSessionId && sessionId && sessionId !== 'null' && existingLive.activeSessionId !== sessionId;
+    const isForced = existingLive.forceLogout;
+
+    if (isHijacked || isForced) {
+      return res.json({ forceLogout: true });
+    }
+    return res.json({ forceLogout: false });
+  } catch (err) {
+    res.json({ forceLogout: false });
+  }
+});
+
 // Telemetry API for Desktop Agent
 app.post('/api/telemetry/heartbeat', async (req, res) => {
   const { employeeId, status, systemBootTime, reason, sessionId } = req.body;
