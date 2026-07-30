@@ -46,6 +46,8 @@ model Attendance {
   date       String   // e.g. "YYYY-MM-DD"
   clockIn    DateTime?
   clockOut   DateTime?
+  systemBootTime DateTime?
+  lastActiveTime DateTime?
   totalMinutes Int    @default(0) // active minutes worked
   createdAt  DateTime @default(now())
 

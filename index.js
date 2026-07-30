@@ -12,6 +12,29 @@ const io = new Server(server, {
     origin: '*',
   }
 });
+
+// Map to store connected desktop agent sockets
+// Key: employeeId, Value: socket.id
+const userSockets = new Map();
+
+io.on('connection', (socket) => {
+  socket.on('identify', (employeeId) => {
+    userSockets.set(employeeId, socket.id);
+    console.log(`Desktop agent connected: Employee ${employeeId}`);
+  });
+
+  socket.on('disconnect', () => {
+    // Remove the socket from the map on disconnect
+    for (const [empId, socketId] of userSockets.entries()) {
+      if (socketId === socket.id) {
+        userSockets.delete(empId);
+        console.log(`Desktop agent disconnected: Employee ${empId}`);
+        break;
+      }
+    }
+  });
+});
+
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3016;
 
@@ -60,13 +83,37 @@ app.post('/api/admin/login', async (req, res) => {
   }
 });
 
+// Remote Action Endpoint
+app.post('/api/admin/remote-action', async (req, res) => {
+  const { employeeId, action } = req.body;
+
+  if (!employeeId || !action) {
+    return res.status(400).json({ error: 'Missing employeeId or action' });
+  }
+
+  const socketId = userSockets.get(employeeId);
+  if (!socketId) {
+    return res.status(404).json({ error: 'Employee desktop agent is not currently connected' });
+  }
+
+  // Emit the action to the specific employee's socket
+  io.to(socketId).emit('remote-action', { action });
+  console.log(`Sent remote action '${action}' to Employee ${employeeId}`);
+  
+  res.json({ message: `Action ${action} sent successfully` });
+});
+
 // Employee Auth
 app.post('/api/employees/login', async (req, res) => {
   const { employeeId, password } = req.body;
   try {
     const emp = await prisma.employee.findUnique({ where: { id: employeeId } });
     if (!emp || emp.password !== password) return res.status(401).json({ error: 'Invalid ID or Password' });
-    res.json({ message: 'Login successful', employeeId: emp.id, hasChangedPassword: emp.hasChangedPassword });
+    
+    const sessionId = Date.now().toString() + Math.random().toString(36).substring(2);
+    io.emit('force-logout', { employeeId: emp.id, activeSessionId: sessionId });
+
+    res.json({ message: 'Login successful', employeeId: emp.id, hasChangedPassword: emp.hasChangedPassword, sessionId });
   } catch (err) {
     res.status(500).json({ error: 'Login error' });
   }
@@ -312,13 +359,29 @@ app.put('/api/employees/:id', async (req, res) => {
 
 // Telemetry API for Desktop Agent
 app.post('/api/telemetry/heartbeat', async (req, res) => {
-  const { employeeId, status } = req.body;
+  const { employeeId, status, systemBootTime } = req.body;
   const today = new Date().toISOString().split('T')[0];
 
   try {
     // 1. Log the activity
     await prisma.activityLog.create({
       data: { employeeId, status }
+    });
+
+    // Upsert LiveTracking
+    await prisma.liveTracking.upsert({
+      where: { employeeId },
+      update: {
+        lastSeen: new Date(),
+        lastActiveTime: status === 'ACTIVE' ? new Date() : undefined,
+        status: status
+      },
+      create: {
+        employeeId,
+        lastSeen: new Date(),
+        lastActiveTime: status === 'ACTIVE' ? new Date() : new Date(),
+        status: status
+      }
     });
 
     // 2. Process daily attendance
@@ -328,12 +391,13 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
 
     if (status === 'ACTIVE') {
       if (!attendance) {
-        // First clock in of the day
+        // First ping of the day, create attendance
         attendance = await prisma.attendance.create({
           data: {
             employeeId,
             date: today,
             clockIn: new Date(),
+            systemBootTime: systemBootTime ? new Date(systemBootTime) : null,
             totalMinutes: 0
           }
         });
@@ -350,15 +414,16 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
           data: { totalMinutes: { increment: 1 } }
         });
       }
-    } else if (status === 'IDLE' || status === 'OFFLINE' || status === 'LOCKED') {
+    } else if (status === 'OFFLINE' || status === 'ADMIN_DECLINED') {
       if (attendance && !attendance.clockOut) {
-        // Clock them out
+        const liveRecord = await prisma.liveTracking.findUnique({ where: { employeeId } });
         await prisma.attendance.update({
           where: { id: attendance.id },
-          data: { clockOut: new Date() }
+          data: { clockOut: liveRecord?.lastActiveTime || new Date() }
         });
       }
     }
+    // Note: If status === 'IDLE' or 'LOCKED', we do NOT clock them out immediately.
 
     // Tell all connected Admins that a live update just occurred
     io.emit('live-update');
@@ -541,6 +606,7 @@ app.get('/api/attendance/daily', async (req, res) => {
         department: emp.department,
         clockIn: att?.clockIn || null,
         clockOut: att?.clockOut || null,
+        systemBootTime: att?.systemBootTime || null,
         totalMinutes: att?.totalMinutes || 0,
         onLeave: !!leave,
         leaveType: leave ? leave.leaveType : null
@@ -551,6 +617,71 @@ app.get('/api/attendance/daily', async (req, res) => {
   } catch (err) {
     console.error('Failed to get daily attendance', err);
     res.status(500).json({ error: 'Failed to fetch daily attendance' });
+  }
+});
+
+// Admin Monthly Attendance Log API
+app.get('/api/attendance/monthly', async (req, res) => {
+  const monthStr = req.query.month; // e.g. "2023-10"
+  if (!monthStr) return res.status(400).json({ error: 'Month parameter is required' });
+
+  try {
+    const employees = await prisma.employee.findMany();
+    const attendances = await prisma.attendance.findMany({
+      where: { date: { startsWith: monthStr } },
+      orderBy: { date: 'asc' }
+    });
+
+    const appActivities = await prisma.appActivity.findMany({
+      where: { date: { startsWith: monthStr } }
+    });
+
+    const monthlyData = [];
+
+    const formatDuration = (secs) => {
+      if (secs < 60) return `${secs}s`;
+      const m = Math.floor(secs / 60);
+      if (m < 60) return `${m}m ${secs % 60}s`;
+      const h = Math.floor(m / 60);
+      return `${h}h ${m % 60}m`;
+    };
+
+    for (const att of attendances) {
+      const emp = employees.find(e => e.id === att.employeeId);
+      if (!emp) continue;
+
+      const appsForDay = appActivities.filter(a => a.employeeId === att.employeeId && a.date === att.date);
+      
+      const appMap = {};
+      for (const a of appsForDay) {
+        if (!appMap[a.appName]) appMap[a.appName] = 0;
+        appMap[a.appName] += a.durationSec;
+      }
+      
+      const appStrings = Object.entries(appMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([appName, duration]) => `${appName} (${formatDuration(duration)})`);
+      
+      const appUsageStr = appStrings.join(', ') || 'No app usage recorded';
+
+      monthlyData.push({
+        id: emp.id,
+        name: emp.name,
+        employeeId: emp.employeeId,
+        department: emp.department,
+        date: att.date,
+        clockIn: att.clockIn,
+        clockOut: att.clockOut,
+        systemBootTime: att.systemBootTime,
+        totalMinutes: att.totalMinutes,
+        appUsageStr: appUsageStr
+      });
+    }
+
+    res.json(monthlyData);
+  } catch (err) {
+    console.error('Failed to get monthly attendance', err);
+    res.status(500).json({ error: 'Failed to fetch monthly attendance' });
   }
 });
 
@@ -603,6 +734,62 @@ app.post('/api/employees/update-password', async (req, res) => {
   }
 });
 
+// Auto-Logout Cron Job (Runs every 5 minutes)
+setInterval(async () => {
+  try {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+    const offlineEmployees = await prisma.liveTracking.findMany({
+      where: {
+        status: { in: ['ACTIVE', 'IDLE', 'LOCKED'] },
+        lastSeen: { lt: cutoff }
+      }
+    });
+
+    if (offlineEmployees.length > 0) {
+      for (const emp of offlineEmployees) {
+        // 1. Mark as OFFLINE
+        await prisma.liveTracking.update({
+          where: { employeeId: emp.employeeId },
+          data: { status: 'OFFLINE' }
+        });
+
+        // 2. Backdate ClockOut
+        const today = new Date().toISOString().split('T')[0];
+        const attendance = await prisma.attendance.findUnique({
+          where: { employeeId_date: { employeeId: emp.employeeId, date: today } }
+        });
+
+        if (attendance && !attendance.clockOut) {
+          await prisma.attendance.update({
+            where: { id: attendance.id },
+            data: { clockOut: emp.lastActiveTime || emp.lastSeen }
+          });
+        }
+      }
+      io.emit('live-update');
+    }
+
+    // Midnight Rollover Check (Check if it's 23:58 or 23:59 to close out the day)
+    const now = new Date();
+    if (now.getHours() === 23 && now.getMinutes() >= 55) {
+      const today = now.toISOString().split('T')[0];
+      const openAttendances = await prisma.attendance.findMany({
+        where: { date: today, clockOut: null }
+      });
+      for (const att of openAttendances) {
+        const liveRecord = await prisma.liveTracking.findUnique({ where: { employeeId: att.employeeId } });
+        await prisma.attendance.update({
+          where: { id: att.id },
+          data: { clockOut: liveRecord?.lastActiveTime || new Date() }
+        });
+      }
+    }
+
+  } catch (err) {
+    console.error('Auto-Logout Cron Error:', err);
+  }
+}, 5 * 60 * 1000);
+
 server.listen(PORT, () => {
-  console.log(`Backend server listening on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
