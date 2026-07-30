@@ -359,13 +359,17 @@ app.put('/api/employees/:id', async (req, res) => {
 
 // Telemetry API for Desktop Agent
 app.post('/api/telemetry/heartbeat', async (req, res) => {
-  const { employeeId, status, systemBootTime } = req.body;
+  const { employeeId, status, systemBootTime, reason } = req.body;
   const today = new Date().toISOString().split('T')[0];
 
   try {
     // 1. Log the activity
     await prisma.activityLog.create({
-      data: { employeeId, status }
+      data: { 
+        employeeId, 
+        status, 
+        tempReason: status === 'TEMP_ACTIVE' ? reason : null 
+      }
     });
 
     // Upsert LiveTracking
@@ -374,13 +378,15 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
       update: {
         lastSeen: new Date(),
         lastActiveTime: status === 'ACTIVE' ? new Date() : undefined,
-        status: status
+        status: status,
+        tempReason: status === 'TEMP_ACTIVE' ? reason : null
       },
       create: {
         employeeId,
         lastSeen: new Date(),
         lastActiveTime: status === 'ACTIVE' ? new Date() : new Date(),
-        status: status
+        status: status,
+        tempReason: status === 'TEMP_ACTIVE' ? reason : null
       }
     });
 
@@ -420,6 +426,13 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
         await prisma.attendance.update({
           where: { id: attendance.id },
           data: { clockOut: liveRecord?.lastActiveTime || new Date() }
+        });
+      }
+    } else if (status === 'TEMP_ACTIVE') {
+      if (attendance) {
+        await prisma.attendance.update({
+          where: { id: attendance.id },
+          data: { tempReason: reason }
         });
       }
     }
@@ -607,6 +620,7 @@ app.get('/api/attendance/daily', async (req, res) => {
         clockIn: att?.clockIn || null,
         clockOut: att?.clockOut || null,
         systemBootTime: att?.systemBootTime || null,
+        tempReason: att?.tempReason || null,
         totalMinutes: att?.totalMinutes || 0,
         onLeave: !!leave,
         leaveType: leave ? leave.leaveType : null

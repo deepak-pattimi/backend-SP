@@ -49,6 +49,7 @@ model Attendance {
   clockOut   DateTime?
   systemBootTime DateTime?
   lastActiveTime DateTime?
+  tempReason     String?
   totalMinutes Int    @default(0) // active minutes worked
   createdAt  DateTime @default(now())
 
@@ -59,7 +60,8 @@ model Attendance {
 model ActivityLog {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
   employeeId String
-  status     String   // "ACTIVE", "IDLE", "OFFLINE"
+  status     String   // "ACTIVE", "IDLE", "OFFLINE", "TEMP_ACTIVE"
+  tempReason String?
   timestamp  DateTime @default(now())
 
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -81,6 +83,7 @@ model LiveTracking {
   status         String
   lastSeen       DateTime @default(now())
   lastActiveTime DateTime?
+  tempReason     String?
   
   employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
