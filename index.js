@@ -363,6 +363,17 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
   const today = new Date().toISOString().split('T')[0];
 
   try {
+    // Check if a forced logout is pending
+    const existingLive = await prisma.liveTracking.findUnique({ where: { employeeId } });
+    if (existingLive && existingLive.forceLogout && status === 'ACTIVE') {
+      // Clear the flag but keep the existing TEMP_ACTIVE state intact in the DB
+      await prisma.liveTracking.update({
+        where: { employeeId },
+        data: { forceLogout: false }
+      });
+      return res.json({ success: true, forceLogout: true });
+    }
+
     // 1. Log the activity
     await prisma.activityLog.create({
       data: { 
@@ -441,10 +452,60 @@ app.post('/api/telemetry/heartbeat', async (req, res) => {
     // Tell all connected Admins that a live update just occurred
     io.emit('live-update');
 
-    res.json({ success: true });
+    res.json({ success: true, forceLogout: false });
   } catch (err) {
     console.error('Telemetry error', err);
     res.status(500).json({ error: 'Failed to process telemetry' });
+  }
+});
+
+// Temp Work Endpoint (Called from Frontend)
+app.post('/api/telemetry/temp-work', async (req, res) => {
+  const { employeeId, reason } = req.body;
+  const today = new Date().toISOString().split('T')[0];
+
+  try {
+    // 1. Log the activity
+    await prisma.activityLog.create({
+      data: { employeeId, status: 'TEMP_ACTIVE', tempReason: reason }
+    });
+
+    // 2. Update LiveTracking to force logout on next heartbeat
+    await prisma.liveTracking.upsert({
+      where: { employeeId },
+      update: {
+        lastSeen: new Date(),
+        status: 'TEMP_ACTIVE',
+        tempReason: reason,
+        forceLogout: true
+      },
+      create: {
+        employeeId,
+        lastSeen: new Date(),
+        lastActiveTime: new Date(),
+        status: 'TEMP_ACTIVE',
+        tempReason: reason,
+        forceLogout: true
+      }
+    });
+
+    // 3. Update daily attendance record
+    const attendance = await prisma.attendance.findUnique({
+      where: { employeeId_date: { employeeId, date: today } }
+    });
+    
+    if (attendance) {
+      await prisma.attendance.update({
+        where: { id: attendance.id },
+        data: { tempReason: reason }
+      });
+    }
+
+    io.emit('live-update');
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Temp Work error', err);
+    res.status(500).json({ error: 'Failed to process temp work' });
   }
 });
 
