@@ -85,6 +85,7 @@ model LiveTracking {
   lastActiveTime DateTime?
   tempReason     String?
   forceLogout    Boolean  @default(false)
+  activeSessionId String?
   
   employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }

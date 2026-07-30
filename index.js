@@ -113,6 +113,17 @@ app.post('/api/employees/login', async (req, res) => {
     const sessionId = Date.now().toString() + Math.random().toString(36).substring(2);
     io.emit('force-logout', { employeeId: emp.id, activeSessionId: sessionId });
 
+    // Store the activeSessionId in LiveTracking
+    await prisma.liveTracking.upsert({
+      where: { employeeId: emp.id },
+      update: { activeSessionId: sessionId, forceLogout: false },
+      create: { 
+        employeeId: emp.id, 
+        status: 'OFFLINE', 
+        activeSessionId: sessionId 
+      }
+    });
+
     res.json({ message: 'Login successful', employeeId: emp.id, hasChangedPassword: emp.hasChangedPassword, sessionId });
   } catch (err) {
     res.status(500).json({ error: 'Login error' });
@@ -359,12 +370,19 @@ app.put('/api/employees/:id', async (req, res) => {
 
 // Telemetry API for Desktop Agent
 app.post('/api/telemetry/heartbeat', async (req, res) => {
-  const { employeeId, status, systemBootTime, reason } = req.body;
+  const { employeeId, status, systemBootTime, reason, sessionId } = req.body;
   const today = new Date().toISOString().split('T')[0];
 
   try {
-    // Check if a forced logout is pending
+    // Check if a forced logout is pending or if the session is hijacked
     const existingLive = await prisma.liveTracking.findUnique({ where: { employeeId } });
+    
+    // NEW SESSION HIJACK CHECK
+    if (existingLive && existingLive.activeSessionId && sessionId && existingLive.activeSessionId !== sessionId) {
+      console.log(`Session mismatch for ${employeeId}. Forcing logout.`);
+      return res.json({ success: true, forceLogout: true });
+    }
+
     if (existingLive && existingLive.forceLogout && status === 'ACTIVE') {
       // Clear the flag but keep the existing TEMP_ACTIVE state intact in the DB
       await prisma.liveTracking.update({
