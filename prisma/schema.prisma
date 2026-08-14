@@ -14,6 +14,9 @@ model Employee {
   role               String         @default("EMPLOYEE")
   password           String?
   hasChangedPassword Boolean        @default(false)
+  monthlySalary      Float          @default(0)
+  dailySalary        Float          @default(0)
+  hourlySalary       Float          @default(0)
   leaves             LeaveRequest[]
   attendances        Attendance[]
   activities         ActivityLog[]

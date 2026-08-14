@@ -154,7 +154,7 @@ app.get('/api/employees', async (req, res) => {
 
 // Add employee
 app.post('/api/employees', async (req, res) => {
-  const { name, email } = req.body;
+  const { name, email, monthlySalary } = req.body;
   
   try {
     const existing = await prisma.employee.findUnique({ where: { email } });
@@ -164,9 +164,20 @@ app.post('/api/employees', async (req, res) => {
 
     const id = Math.random().toString(36).substring(2, 7).toUpperCase();
     const tempPassword = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digit PIN
+    const salaryMonthly = parseFloat(monthlySalary) || 0;
+    const salaryDaily = Number((salaryMonthly / 24).toFixed(2));
+    const salaryHourly = Number((salaryDaily / 8).toFixed(2));
     
     const employee = await prisma.employee.create({
-      data: { id, name, email, password: tempPassword }
+      data: { 
+        id, 
+        name, 
+        email, 
+        password: tempPassword,
+        monthlySalary: salaryMonthly,
+        dailySalary: salaryDaily,
+        hourlySalary: salaryHourly
+      }
     });
 
     if (transporter) {
@@ -357,14 +368,43 @@ app.delete('/api/employees/:id', async (req, res) => {
 // Update employee
 app.put('/api/employees/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, email, role } = req.body;
+  const { newId, name, email, role, password, monthlySalary } = req.body;
   try {
-    const employee = await prisma.employee.update({
-      where: { id: id },
-      data: { name, email, role }
-    });
-    io.emit('data-update');
-    res.json(employee);
+    const updateData = { name, email, role };
+    if (password !== undefined) updateData.password = password;
+    if (monthlySalary !== undefined) {
+      const salaryMonthly = parseFloat(monthlySalary) || 0;
+      const salaryDaily = Number((salaryMonthly / 24).toFixed(2));
+      const salaryHourly = Number((salaryDaily / 8).toFixed(2));
+      updateData.monthlySalary = salaryMonthly;
+      updateData.dailySalary = salaryDaily;
+      updateData.hourlySalary = salaryHourly;
+    }
+
+    if (newId && newId !== id) {
+      const oldEmp = await prisma.employee.findUnique({ where: { id } });
+      if (!oldEmp) return res.status(404).json({ error: 'Employee not found' });
+      
+      const newEmpData = { ...oldEmp, ...updateData, id: newId };
+      await prisma.employee.create({ data: newEmpData });
+      
+      await prisma.leaveRequest.updateMany({ where: { employeeId: id }, data: { employeeId: newId } });
+      await prisma.attendance.updateMany({ where: { employeeId: id }, data: { employeeId: newId } });
+      await prisma.activityLog.updateMany({ where: { employeeId: id }, data: { employeeId: newId } });
+      await prisma.appActivity.updateMany({ where: { employeeId: id }, data: { employeeId: newId } });
+      await prisma.liveTracking.updateMany({ where: { employeeId: id }, data: { employeeId: newId } });
+      
+      await prisma.employee.delete({ where: { id } });
+      io.emit('data-update');
+      return res.json(newEmpData);
+    } else {
+      const employee = await prisma.employee.update({
+        where: { id: id },
+        data: updateData
+      });
+      io.emit('data-update');
+      return res.json(employee);
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update employee' });
@@ -801,6 +841,55 @@ app.get('/api/attendance/monthly', async (req, res) => {
   } catch (err) {
     console.error('Failed to get monthly attendance', err);
     res.status(500).json({ error: 'Failed to fetch monthly attendance' });
+  }
+});
+
+// Admin Monthly Salary Report API
+app.get('/api/salary/monthly', async (req, res) => {
+  const monthStr = req.query.month; // e.g. "2026-08"
+  if (!monthStr) return res.status(400).json({ error: 'Month parameter is required' });
+
+  try {
+    const employees = await prisma.employee.findMany();
+    const attendances = await prisma.attendance.findMany({
+      where: { date: { startsWith: monthStr } }
+    });
+
+    const report = employees.map(emp => {
+      const empAttendances = attendances.filter(a => a.employeeId === emp.id);
+      
+      const daysPresent = empAttendances.length;
+      const reqNotMetDays = empAttendances.filter(a => (a.totalMinutes || 0) < 420).length;
+      
+      const totalMinutes = empAttendances.reduce((acc, curr) => acc + (curr.totalMinutes || 0), 0);
+      const hoursActive = Number((totalMinutes / 60).toFixed(1));
+      
+      const monthlySalary = emp.monthlySalary || 0;
+      const dailySalary = emp.dailySalary || (monthlySalary ? Number((monthlySalary / 24).toFixed(2)) : 0);
+      const hourlySalary = emp.hourlySalary || (dailySalary ? Number((dailySalary / 8).toFixed(2)) : (monthlySalary ? Number(((monthlySalary / 24) / 8).toFixed(2)) : 0));
+      
+      // Calculate acquired salary based on active hours worked
+      const totalHoursFloat = totalMinutes / 60;
+      const salaryAcquired = Number((totalHoursFloat * hourlySalary).toFixed(2));
+
+      return {
+        id: emp.id,
+        name: emp.name,
+        email: emp.email,
+        monthlySalary,
+        dailySalary,
+        hourlySalary,
+        daysPresent,
+        reqNotMetDays,
+        hoursActive,
+        salaryAcquired
+      };
+    });
+
+    res.json(report);
+  } catch (err) {
+    console.error('Failed to fetch monthly salary report', err);
+    res.status(500).json({ error: 'Failed to fetch monthly salary report' });
   }
 });
 
