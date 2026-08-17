@@ -149,6 +149,10 @@ app.post('/api/employees/change-password', async (req, res) => {
 // Get all employees
 app.get('/api/employees', async (req, res) => {
   const employees = await prisma.employee.findMany();
+  console.log(`[LOG] GET /api/employees requested. Fetched ${employees.length} employees.`);
+  employees.forEach(emp => {
+    console.log(`[EMP LOG] ID: ${emp.id} | Name: ${emp.name} | Monthly: ${emp.monthlySalary} | Daily: ${emp.dailySalary} | Hourly: ${emp.hourlySalary}`);
+  });
   res.json(employees);
 });
 
@@ -369,6 +373,7 @@ app.delete('/api/employees/:id', async (req, res) => {
 app.put('/api/employees/:id', async (req, res) => {
   const { id } = req.params;
   const { newId, name, email, role, password, monthlySalary } = req.body;
+  console.log(`[LOG] PUT /api/employees/${id} received body:`, req.body);
   try {
     const updateData = {};
     if (name !== undefined) updateData.name = name;
