@@ -370,9 +370,13 @@ app.put('/api/employees/:id', async (req, res) => {
   const { id } = req.params;
   const { newId, name, email, role, password, monthlySalary } = req.body;
   try {
-    const updateData = { name, email, role };
-    if (password !== undefined) updateData.password = password;
-    if (monthlySalary !== undefined) {
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
+    if (role !== undefined) updateData.role = role;
+    if (password !== undefined && password !== '') updateData.password = password;
+    
+    if (monthlySalary !== undefined && monthlySalary !== '' && monthlySalary !== null) {
       const salaryMonthly = parseFloat(monthlySalary) || 0;
       const salaryDaily = Number((salaryMonthly / 24).toFixed(2));
       const salaryHourly = Number((salaryDaily / 8).toFixed(2));
@@ -406,8 +410,8 @@ app.put('/api/employees/:id', async (req, res) => {
       return res.json(employee);
     }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to update employee' });
+    console.error('Error updating employee:', err);
+    res.status(500).json({ error: err.message || 'Failed to update employee' });
   }
 });
 
