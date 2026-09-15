@@ -853,23 +853,96 @@ app.get('/api/attendance/monthly', async (req, res) => {
   }
 });
 
+// Helper to format average minutes from midnight to 12-hour AM/PM string
+function formatAvgMinutes(avgMins) {
+  if (avgMins === null || isNaN(avgMins)) return '--';
+  let hours = Math.floor(avgMins / 60) % 24;
+  let minutes = Math.round(avgMins % 60);
+  if (minutes === 60) {
+    hours = (hours + 1) % 24;
+    minutes = 0;
+  }
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 === 0 ? 12 : hours % 12;
+  const displayMinutes = minutes < 10 ? `0${minutes}` : minutes;
+  return `${displayHours}:${displayMinutes} ${ampm}`;
+}
+
+// Holidays API
+app.get('/api/holidays', async (req, res) => {
+  const monthStr = req.query.month;
+  try {
+    const where = monthStr ? { date: { startsWith: monthStr } } : {};
+    const holidays = await prisma.holiday.findMany({ where });
+    res.json(holidays);
+  } catch (err) {
+    console.error('Failed to get holidays', err);
+    res.status(500).json({ error: 'Failed to fetch holidays' });
+  }
+});
+
+app.post('/api/holidays/toggle', async (req, res) => {
+  const { date, title } = req.body;
+  if (!date) return res.status(400).json({ error: 'Date is required' });
+
+  try {
+    const existing = await prisma.holiday.findUnique({ where: { date } });
+    if (existing) {
+      await prisma.holiday.delete({ where: { date } });
+      io.emit('data-update');
+      return res.json({ success: true, isHoliday: false });
+    } else {
+      const created = await prisma.holiday.create({
+        data: { date, title: title || 'Public Holiday' }
+      });
+      io.emit('data-update');
+      return res.json({ success: true, isHoliday: true, holiday: created });
+    }
+  } catch (err) {
+    console.error('Failed to toggle holiday', err);
+    res.status(500).json({ error: 'Failed to toggle holiday' });
+  }
+});
+
 // Admin Monthly Salary Report API
 app.get('/api/salary/monthly', async (req, res) => {
   const monthStr = req.query.month; // e.g. "2026-08"
   if (!monthStr) return res.status(400).json({ error: 'Month parameter is required' });
 
   try {
+    const [year, month] = monthStr.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const now = new Date();
+    const isCurrentMonth = (now.getFullYear() === year && (now.getMonth() + 1) === month);
+    const totalDaysToCount = isCurrentMonth ? now.getDate() : daysInMonth;
+
     const employees = await prisma.employee.findMany();
     const attendances = await prisma.attendance.findMany({
       where: { date: { startsWith: monthStr } }
     });
+    const holidays = await prisma.holiday.findMany({
+      where: { date: { startsWith: monthStr } }
+    });
+    const holidayDateSet = new Set(holidays.map(h => h.date));
 
     const report = employees.map(emp => {
       const empAttendances = attendances.filter(a => a.employeeId === emp.id);
       
-      const daysPresent = empAttendances.length;
-      const reqNotMetDays = empAttendances.filter(a => (a.totalMinutes || 0) < 420).length;
-      
+      const daysPresent = empAttendances.filter(a => (a.totalMinutes || 0) >= 60).length;
+      const reqNotMetDays = empAttendances.filter(a => (a.totalMinutes || 0) >= 60 && (a.totalMinutes || 0) < 420).length;
+      const daysAbsent = Math.max(0, totalDaysToCount - daysPresent);
+
+      const holidayWorkingDays = empAttendances.filter(a => {
+        if ((a.totalMinutes || 0) < 60) return false;
+        const d = new Date(`${a.date}T12:00:00Z`);
+        const isSunday = d.getUTCDay() === 0;
+        const isPublicHoliday = holidayDateSet.has(a.date);
+        return isSunday || isPublicHoliday;
+      }).length;
+
+      // Col 6: Total Present Days (Inc. Sundays) = Col 3 + Col 5
+      const totalPresentDaysIncSundays = daysPresent + holidayWorkingDays;
+
       const totalMinutes = empAttendances.reduce((acc, curr) => acc + (curr.totalMinutes || 0), 0);
       const hoursActive = Number((totalMinutes / 60).toFixed(1));
       
@@ -877,21 +950,51 @@ app.get('/api/salary/monthly', async (req, res) => {
       const dailySalary = emp.dailySalary || (monthlySalary ? Number((monthlySalary / 24).toFixed(2)) : 0);
       const hourlySalary = emp.hourlySalary || (dailySalary ? Number((dailySalary / 8).toFixed(2)) : (monthlySalary ? Number(((monthlySalary / 24) / 8).toFixed(2)) : 0));
       
-      // Calculate acquired salary based on active hours worked
-      const totalHoursFloat = totalMinutes / 60;
-      const salaryAcquired = Number((totalHoursFloat * hourlySalary).toFixed(2));
+      // Salary Acquired = (Monthly Salary * Total Present Days Inc. Sundays) / Total Days in Month
+      // Formula: (Col 10 * Col 6) / Col 2
+      const salaryAcquired = totalDaysToCount > 0 
+        ? Number(((monthlySalary * totalPresentDaysIncSundays) / totalDaysToCount).toFixed(2))
+        : 0;
+
+      // Calculate average login and logout times
+      const clockIns = empAttendances.map(a => a.clockIn).filter(Boolean);
+      const clockOuts = empAttendances.map(a => a.clockOut).filter(Boolean);
+
+      let avgClockIn = '--';
+      if (clockIns.length > 0) {
+        const totalClockInMins = clockIns.reduce((sum, ci) => {
+          const d = new Date(ci);
+          return sum + (d.getHours() * 60 + d.getMinutes());
+        }, 0);
+        avgClockIn = formatAvgMinutes(totalClockInMins / clockIns.length);
+      }
+
+      let avgClockOut = '--';
+      if (clockOuts.length > 0) {
+        const totalClockOutMins = clockOuts.reduce((sum, co) => {
+          const d = new Date(co);
+          return sum + (d.getHours() * 60 + d.getMinutes());
+        }, 0);
+        avgClockOut = formatAvgMinutes(totalClockOutMins / clockOuts.length);
+      }
 
       return {
         id: emp.id,
         name: emp.name,
         email: emp.email,
-        monthlySalary,
-        dailySalary,
-        hourlySalary,
+        totalDays: totalDaysToCount,
         daysPresent,
-        reqNotMetDays,
+        daysAbsent,
+        holidayWorkingDays,
+        totalPresentDaysIncSundays,
+        avgClockIn,
+        avgClockOut,
         hoursActive,
-        salaryAcquired
+        monthlySalary,
+        salaryAcquired,
+        reqNotMetDays,
+        dailySalary,
+        hourlySalary
       };
     });
 

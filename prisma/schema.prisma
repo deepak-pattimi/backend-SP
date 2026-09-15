@@ -92,3 +92,10 @@ model LiveTracking {
   
   employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 }
+
+model Holiday {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  date      String   @unique // "YYYY-MM-DD"
+  title     String?  @default("Public Holiday")
+  createdAt DateTime @default(now())
+}
